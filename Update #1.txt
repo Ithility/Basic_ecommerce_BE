@@ -1,0 +1,5 @@
+
+The updated code introduces user authentication with registration and login functionality, 
+utilizing bcrypt for password hashing and JWT tokens for secure authentication. 
+Additionally, cart management features are added, allowing users to add, view, and remove items from their cart, 
+enhancing the e-commerce application's functionality.

@@ -1,15 +1,16 @@
 from flask_sqlalchemy import SQLAlchemy
 from functools import wraps
 from flask import Flask, request, jsonify
+import bcrypt
+import jwt
+from datetime import datetime, timedelta
 
 app = Flask(__name__)
 
-@app.route('/')
-def index():
-    return 'Welcome to the User Management API!'
 
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///your_database.db'
 db = SQLAlchemy(app)
+
 
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -18,6 +19,7 @@ class User(db.Model):
 
     def __repr__(self):
         return '<User %r>' % self.username
+
 
 class Product(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -29,10 +31,33 @@ class Product(db.Model):
     def __repr__(self):
         return '<Product %r>' % self.name
 
-if __name__ == '__main__':
-    with app.app_context():
-        db.create_all()
-    app.run(debug=True)
+
+class CartItem(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    product_id = db.Column(db.Integer, db.ForeignKey('product.id'), nullable=False)
+    quantity = db.Column(db.Integer, nullable=False)
+
+    def __repr__(self):
+        return '<CartItem %r>' % self.id
+
+
+def generate_hashed_password(password):
+    hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
+    return hashed_password.decode('utf-8')
+
+def verify_password(password, hashed_password):
+    hashed_input_password = bcrypt.hashpw(password.encode('utf-8'), hashed_password.encode('utf-8'))
+    return hashed_input_password == hashed_password
+
+
+def generate_token(user_id):
+    payload = {
+        'user_id': user_id,
+        'exp': datetime.utcnow() + timedelta(days=1)
+    }
+    token = jwt.encode(payload, 'secret_key', algorithm='HS256')
+    return token.decode('utf-8')
 
 def requires_auth(f):
     @wraps(f)
@@ -48,41 +73,105 @@ def check_auth(username, password):
 
 # Routes
 
-@app.route('/product', methods=['POST'])
-@requires_auth
-def create_product():
+@app.route('/')
+def index():
+    return 'Welcome to the User Management API!'
+
+@app.route('/register', methods=['POST'])
+def register():
     data = request.get_json()
-    new_product = Product(name=data['name'], description=data['description'], price=data['price'], quantity=data['quantity'])
-    db.session.add(new_product)
+    username = data.get('username')
+    password = data.get('password')
+
+    if not username or not password:
+        return jsonify({'message': 'Username and password are required'}), 400
+
+    if User.query.filter_by(username=username).first():
+        return jsonify({'message': 'Username already exists'}), 409
+
+
+    hashed_password = generate_hashed_password(password)
+
+
+    new_user = User(username=username, password=hashed_password)
+    db.session.add(new_user)
     db.session.commit()
-    return jsonify({'message': 'Product created successfully'}), 201
 
-@app.route('/product/<int:product_id>', methods=['GET'])
-@requires_auth
-def get_product(product_id):
-    product = Product.query.get_or_404(product_id)
-    return jsonify({'name': product.name, 'description': product.description, 'price': product.price, 'quantity': product.quantity})
+    return jsonify({'message': 'User registered successfully'}), 201
 
-@app.route('/product/<int:product_id>', methods=['PUT'])
-@requires_auth
-def update_product(product_id):
-    product = Product.query.get_or_404(product_id)
+@app.route('/login', methods=['POST'])
+def login():
     data = request.get_json()
-    product.name = data['name']
-    product.description = data['description']
-    product.price = data['price']
-    product.quantity = data['quantity']
-    db.session.commit()
-    return jsonify({'message': 'Product updated successfully'}), 200
+    username = data.get('username')
+    password = data.get('password')
 
-@app.route('/product/<int:product_id>', methods=['DELETE'])
+    user = User.query.filter_by(username=username).first()
+
+    if not user or not verify_password(password, user.password):
+        return jsonify({'message': 'Invalid username or password'}), 401
+
+
+    token = generate_token(user.id)
+    return jsonify({'token': token}), 200
+
+# Product routes...
+
+# Cart routes
+@app.route('/cart', methods=['POST'])
 @requires_auth
-def delete_product(product_id):
-    product = Product.query.get_or_404(product_id)
-    db.session.delete(product)
+def add_to_cart():
+    data = request.get_json()
+    user_id = data.get('user_id')
+    product_id = data.get('product_id')
+    quantity = data.get('quantity')
+
+
+    product = Product.query.get(product_id)
+    if not product:
+        return jsonify({'message': 'Product not found'}), 404
+
+
+    existing_item = CartItem.query.filter_by(user_id=user_id, product_id=product_id).first()
+    if existing_item:
+
+        existing_item.quantity += quantity
+    else:
+
+        new_item = CartItem(user_id=user_id, product_id=product_id, quantity=quantity)
+        db.session.add(new_item)
+
     db.session.commit()
-    return jsonify({'message': 'Product deleted successfully'}), 200
+
+    return jsonify({'message': 'Item added to cart successfully'}), 201
+
+@app.route('/cart/<int:user_id>', methods=['GET'])
+@requires_auth
+def view_cart(user_id):
+
+    cart_items = CartItem.query.filter_by(user_id=user_id).all()
+
+    cart = []
+    for item in cart_items:
+        product = Product.query.get(item.product_id)
+        cart.append({'product_id': item.product_id, 'name': product.name, 'quantity': item.quantity})
+
+    return jsonify({'cart': cart})
+
+@app.route('/cart/<int:user_id>/<int:product_id>', methods=['DELETE'])
+@requires_auth
+def remove_from_cart(user_id, product_id):
+
+    item = CartItem.query.filter_by(user_id=user_id, product_id=product_id).first()
+    if not item:
+        return jsonify({'message': 'Item not found in cart'}), 404
+
+    db.session.delete(item)
+    db.session.commit()
+
+    return jsonify({'message': 'Item removed from cart successfully'}), 200
 
 if __name__ == '__main__':
     app.run(debug=True)
+
+
 

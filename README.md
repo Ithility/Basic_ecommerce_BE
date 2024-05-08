@@ -13,17 +13,17 @@ Getting Started:
 1.
 -Clone the repository
 
-git clone https://github.com/Ithility/Basic_ecommerce_BE
+      git clone https://github.com/Ithility/Basic_ecommerce_BE
 
 2.
 -Install Dependencies:
 
-pip install Flask Flask-SQLAlchemy
+      pip install Flask Flask-SQLAlchemy
 
 3.
 -Run the application:
 
-python main_ecommerce.py
+      python main_ecommerce.py
 
 
 API Endpoints
